@@ -20,6 +20,7 @@ function triggerAlternativeStart(match) { return { type: "TRIGGER_ALTERNATIVE_ST
 function triggerAlternativeEnd(match) { return { type: "TRIGGER_ALTERNATIVE_END" }; };
 function triggerOptionalStart(match) { return { type: "TRIGGER_OPTIONAL_START" }; };
 function triggerOptionalEnd(match) { return { type: "TRIGGER_OPTIONAL_END" }; };
+function carriageReturn(match) { return { type: "CARRIAGE_RETURN" }; };
 
 // triggers
 tokens.push({match: /^\+ /m, is: trigger});
@@ -37,7 +38,7 @@ tokens.push({match: /\]/, is: triggerOptionalEnd});
 // responses
 tokens.push({match: /^- /m, is: response});
 // continuation
-tokens.push({match: /\n\^ /, is: responseContinue});
+tokens.push({match: /^\^ /m, is: responseContinue});
 // response weight
 tokens.push({match: /{weight=([0-9]+)}/, is: responseWeight});
 // response wildcard resolution
@@ -48,6 +49,7 @@ tokens.push({match: /^\/\/(.*)$/m, is: comment});
 
 // a word
 tokens.push({match: /[a-zA-Z]+/, is: word});
+tokens.push({match: /\r?\n/, is: carriageReturn});
 tokens.push({match: /./, is: symbol});
 
 function tokenize(string) {
@@ -75,8 +77,75 @@ function tokenize(string) {
 
   return tokenList;
 }
-console.log(tokenize(`
-// comment
-+ My name is (ryan|john[ny])
-- Hi, <star>!
-`));
+
+
+
+let ends = {
+  "TRIGGER_START": "CARRIAGE_RETURN",
+  "RESPONSE_START": "CARRIAGE_RETURN",
+  "TRIGGER_ALTERNATIVE_START": "TRIGGER_ALTERNATIVE_END",
+  "TRIGGER_OPTIONAL_START": "TRIGGER_OPTIONAL_END",
+}
+function validate(allTokens) {
+  let root = [];
+
+  for (let ct = 0; ct < allTokens.length; ct++) {
+    let token = allTokens[ct];
+    switch (token.type) {
+      // tokens that have a start and an end
+      // initially, begin on the start. Find the end tag, and put everything in
+      // between as children. Rinse and repeat recursively.
+      case "TRIGGER_START":
+      case "RESPONSE_START":
+      case "TRIGGER_ALTERNATIVE_START":
+      case "TRIGGER_OPTIONAL_START":
+        let triggerContents = getUntilToken(allTokens.slice(ct), ends[token.type]);
+        if (triggerContents) {
+          let trigger = Object.assign({}, token, {
+            contents: validate(triggerContents.slice(1)),
+          });
+          root.push(trigger);
+          ct += triggerContents.length; // move on to tokens that haven't become children
+        } else {
+          throw new Error("Triggers must be followed by a carriage return");
+        }
+        break;
+
+      // carriage returns are meaningless at this point
+      case "CARRIAGE_RETURN":
+        break;
+
+      // tokens that stand by themselves
+      default:
+        root.push(token);
+        break;
+    }
+  }
+  return root;
+}
+
+function getUntilToken(tokenList, tokenType='SYMBOL') {
+  let selectedToken = tokenList[0], tokenIndex = 0;
+  while (selectedToken.type !== tokenType) {
+    if (tokenList.length > tokenIndex) {
+      selectedToken = tokenList[++tokenIndex];
+    } else {
+      return false; // no such token upstream
+    }
+  }
+  return tokenList.slice(0, tokenIndex);
+}
+
+
+// let allTokens = tokenize(`
+// // comment
+// + My name is (ryan|john[ny])
+// - Hi, <star>!
+//
+// `);
+let allTokens = tokenize(`
++ abc def ghi
+`);
+
+let validated = validate(allTokens);
+console.log(JSON.stringify(validated, null, 2));
